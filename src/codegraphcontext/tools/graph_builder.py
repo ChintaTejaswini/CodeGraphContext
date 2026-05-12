@@ -858,6 +858,10 @@ class GraphBuilder:
             if "error" not in file_data:
                 self.add_file_to_graph(file_data, repo_name, imports_map)
                 return file_data
+            if not file_data.get("unsupported"):
+                # Generic file type (.md, .yml, .json, etc.) — create a bare File node
+                self.add_minimal_file_node(path, repo_path)
+                return file_data
             error_logger(f"Skipping graph add for {file_path_str} due to parsing error: {file_data['error']}")
             return None
         return {"deleted": True, "path": file_path_str}
@@ -963,11 +967,27 @@ class GraphBuilder:
         try:
             scip_enabled = (get_config_value("SCIP_INDEXER") or "false").lower() == "true"
             if scip_enabled:
-                from .scip_indexer import detect_project_lang, is_scip_available
+                from .scip_indexer import ScipIndexer, detect_project_lang, is_scip_available
 
                 scip_langs_str = get_config_value("SCIP_LANGUAGES") or "python,typescript,javascript,go,rust,java,dart,cpp,c,csharp,php,ruby,kotlin,swift,elixir"
                 scip_languages = [l.strip() for l in scip_langs_str.split(",") if l.strip()]
                 detected_lang = detect_project_lang(path, scip_languages)
+
+                if (
+                    detected_lang in ("cpp", "c")
+                    and path.is_dir()
+                    and not ScipIndexer._find_compdb(path)
+                ):
+                    warning_logger(
+                        "[SCIP] C/C++ project detected but no compile_commands.json was found "
+                        f"(searched under {path.resolve()}). scip-clang needs a JSON compilation database "
+                        "listing real compiler invocations (include paths, -D defines, -std, etc.). "
+                        "Typical ways to create it: CMake with "
+                        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON, or run your build under "
+                        "Bear (https://github.com/rizsotto/Bear) (e.g. `bear -- make`). "
+                        "Without it, SCIP cannot index C/C++; CGC will fall back to Tree-sitter if SCIP fails. "
+                        'See README section "SCIP indexing (optional)".'
+                    )
 
                 if detected_lang and is_scip_available(detected_lang):
                     info_logger(f"SCIP_INDEXER=true — using SCIP for language: {detected_lang}")
