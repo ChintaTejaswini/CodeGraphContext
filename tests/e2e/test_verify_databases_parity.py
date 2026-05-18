@@ -30,9 +30,11 @@ async def run_indexing_in_process(db_type: str, project_path: Path, temp_test_di
             except OSError:
                 pass
     
+    project_path_str = str(project_path.resolve())
+    
     # Construct a python command to run the indexing
     cmd = f"""
-import os, sys, asyncio
+import os, sys, asyncio, json
 from dotenv import load_dotenv
 load_dotenv('/home/shashank/.codegraphcontext/.env')
 os.environ.setdefault('NEO4J_URI', 'bolt://localhost:7687')
@@ -59,8 +61,9 @@ async def run():
     job_mgr = JobManager()
     builder = GraphBuilder(db_mgr, job_mgr, asyncio.get_running_loop())
     
-    print("Indexing path: {project_path}")
-    await builder.build_graph_from_path_async(Path('{project_path}'))
+    project_path = Path('{project_path_str}')
+    print(f"Indexing path: {{project_path}}")
+    await builder.build_graph_from_path_async(project_path)
     
     # Collect stats before closing
     stats = {{}}
@@ -78,10 +81,17 @@ async def run():
             stats[f"REL_{{rel}}"] = res.single()[0]
             
     db_mgr.close_driver()
-    import json
     print("STATS_JSON:" + json.dumps(stats))
 
-asyncio.run(run())
+async def main():
+    try:
+        await run()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+asyncio.run(main())
 """
     
     proc = await asyncio.create_subprocess_exec(
@@ -121,7 +131,7 @@ async def test_database_parity_e2e(temp_test_dir):
     os.environ.setdefault('NEO4J_USERNAME', 'neo4j')
     os.environ.setdefault('NEO4J_PASSWORD', '12345678')
     
-    project_path = Path("tests/fixtures/sample_projects/sample_project").resolve()
+    project_path = Path("tests/fixtures/sample_projects").resolve()
     
     db_types = ["kuzudb", "ladybugdb", "falkordb", "neo4j"]
     results = {}
