@@ -266,6 +266,17 @@ class GraphWriter:
                 )
 
             if params_batch:
+                # Deduplicate parameter rows to ensure consistent counts across
+                # all database backends.  FalkorDB in particular may create
+                # duplicate Parameter nodes / HAS_PARAMETER edges when the same
+                # (func_name, line_number, arg_name) tuple appears more than once.
+                seen_params: set = set()
+                unique_params: List[Dict[str, Any]] = []
+                for p in params_batch:
+                    key = (p["func_name"], p["line_number"], p["arg_name"])
+                    if key not in seen_params:
+                        seen_params.add(key)
+                        unique_params.append(p)
                 session.run(
                     """
                     UNWIND $batch AS row
@@ -273,7 +284,7 @@ class GraphWriter:
                     MERGE (p:Parameter {name: row.arg_name, path: $file_path, function_line_number: row.line_number})
                     MERGE (fn)-[:HAS_PARAMETER]->(p)
                 """,
-                    batch=params_batch,
+                    batch=unique_params,
                     file_path=file_path_str,
                 )
 
@@ -553,7 +564,8 @@ class GraphWriter:
                         MATCH (called:{called_label} {{name: row.called_name, path: row.called_file_path}})
                         WHERE (row.called_line_number <= 0 OR called.line_number = row.called_line_number)
                           {called_context_clause}
-                        MERGE (caller)-[call:CALLS {{line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}}]->(called)
+                        MERGE (caller)-[call:CALLS {{line_number: row.line_number, full_call_name: row.full_call_name}}]->(called)
+                        SET call.args = row.args
                         SET call.confidence = row.confidence
                         SET call.resolution_tier = row.resolution_tier
                         SET call.confidence_label = row.confidence_label
@@ -565,7 +577,8 @@ class GraphWriter:
                         MATCH (called:{called_label} {{name: row.called_name, path: row.called_file_path}})
                         WHERE (row.called_line_number <= 0 OR called.line_number = row.called_line_number)
                           {called_context_clause}
-                        MERGE (caller)-[call:CALLS {{line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}}]->(called)
+                        MERGE (caller)-[call:CALLS {{line_number: row.line_number, full_call_name: row.full_call_name}}]->(called)
+                        SET call.args = row.args
                         SET call.confidence = row.confidence
                         SET call.resolution_tier = row.resolution_tier
                         SET call.confidence_label = row.confidence_label
