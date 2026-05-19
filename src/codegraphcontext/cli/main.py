@@ -772,6 +772,29 @@ registry_app = typer.Typer(
 app.add_typer(registry_app, name="registry")
 
 
+# Create API command group
+api_app = typer.Typer(help="CGC Gateway (HTTP API) commands")
+app.add_typer(api_app, name="api")
+
+@api_app.command("start")
+def api_start(
+    host: str = typer.Option("0.0.0.0", help="Host to bind the server to"),
+    port: int = typer.Option(8000, help="Port to bind the server to"),
+    reload: bool = typer.Option(False, help="Enable auto-reload (development only)"),
+):
+    """
+    Start the CGC Gateway HTTP API server.
+    
+    This server provides a REST API that can be used by ChatGPT Actions,
+    Claude, or web frontends to interact with the CodeGraphContext graph.
+    """
+    import uvicorn
+    console.print(f"[bold green]Starting CGC Gateway on {host}:{port}...[/bold green]")
+    _load_credentials()
+    uvicorn.run("codegraphcontext.api.app:app", host=host, port=port, reload=reload)
+
+
+
 @registry_app.callback()
 def registry_callback(ctx: typer.Context):
     """Browse and download bundles from the registry."""

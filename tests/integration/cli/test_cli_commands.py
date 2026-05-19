@@ -238,6 +238,11 @@ def cli_test_stubs(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_main, "run_neo4j_setup_wizard", lambda *_args, **_kwargs: None)
 
     monkeypatch.setattr(cli_main, "index_helper", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli_main, "setup_scip_helper", lambda *_args, **_kwargs: None)
+    
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda *_args, **_kwargs: None)
+
     monkeypatch.setattr(cli_main, "add_package_helper", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli_main, "list_repos_helper", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli_main, "delete_helper", lambda *_args, **_kwargs: None)
@@ -363,6 +368,8 @@ def test_cli_inventory_grouped_from_source():
         "variable",
         "kotlin-call-audit",
     }
+    if "api" in inventory:
+        assert inventory["api"] == {"start"}
     if "datasource" in inventory:
         assert inventory["datasource"] == {"mysql", "cassandra", "redis"}
     if "context" in inventory:
@@ -390,7 +397,8 @@ def test_all_canonical_cli_commands_run_with_kuzudb(kuzudb_env, cli_test_stubs):
         ["registry", "download", "numpy"],
         ["registry", "request", "https://github.com/example/repo"],
         ["doctor"],
-        ["start"],
+        ["setup-scip"],
+        ["api", "start"],
         ["index", "."],
         ["clean"],
         ["stats"],
