@@ -11,7 +11,7 @@ const IGNORED_DIRS = new Set([
   '.next', '.nuxt', '__pycache__', 'venv', '.venv', 'env', '.env', '.tox',
   'eggs', 'target', '.gradle', '.idea', 'cmake-build-debug', 'bin', 'obj',
   'packages', 'vendor', 'Pods', '.build', 'DerivedData', '.dart_tool',
-  '.vscode'
+  '.vscode', 'test', 'tests', '__tests__', 'spec', 'specs'
 ]);
 
 const sanitizePath = (pathStr: string, repoName?: string): string => {

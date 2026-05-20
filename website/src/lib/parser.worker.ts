@@ -2,12 +2,32 @@ import { Parser, Language, Query } from "web-tree-sitter";
 // Leverage Vite's asset pipeline to guarantee we receive the exact .wasm file that matches our NPM package version
 import treeSitterWasmUrl from "web-tree-sitter/tree-sitter.wasm?url";
 
+// Stream worker console logs to the main thread for the live system diagnostics HUD
+const originalLog = console.log;
+const originalWarn = console.warn;
+
+console.log = (...args: any[]) => {
+  originalLog.apply(console, args);
+  const msg = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(" ");
+  if (msg.includes("[Diagnostic]") || msg.includes("[Worker")) {
+    self.postMessage({ type: 'DIAGNOSTIC_LOG', payload: msg });
+  }
+};
+
+console.warn = (...args: any[]) => {
+  originalWarn.apply(console, args);
+  const msg = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(" ");
+  if (msg.includes("[Diagnostic]") || msg.includes("[Worker")) {
+    self.postMessage({ type: 'DIAGNOSTIC_LOG', payload: msg });
+  }
+};
+
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', '.github', 'dist', 'build', 'out', 'coverage',
   '.next', '.nuxt', '__pycache__', 'venv', '.venv', 'env', '.env', '.tox',
   'eggs', 'target', '.gradle', '.idea', 'cmake-build-debug', 'bin', 'obj',
   'packages', 'vendor', 'Pods', '.build', 'DerivedData', '.dart_tool',
-  '.vscode'
+  '.vscode', 'test', 'tests', '__tests__', 'spec', 'specs'
 ]);
 
 let parser: any = null;
@@ -72,7 +92,13 @@ async function getLanguageForFile(path: string) {
     return lang;
   }
 
-  const CACHE_LIMIT = 3;
+  // Set CACHE_LIMIT to accommodate all supported languages (we support 16 languages).
+  // CRITICAL MEMORY NOTE: Keeping this limit high (e.g., 20) prevents fatal WebAssembly compilation memory leaks.
+  // In V8/Chromium, deleting a JS reference to a compiled WASM Language does not free the native WASM machine code.
+  // If this limit is low (e.g., 3) and we index a multi-language repo (like the tests folder), the LRU cache will
+  // constantly evict and re-compile the same WASM files, leaking memory infinitely and crashing the worker.
+  // Keeping them in cache ensures each language is compiled EXACTLY ONCE.
+  const CACHE_LIMIT = 20;
   if (wasmLanguageCache.size >= CACHE_LIMIT) {
     const oldestKey = wasmLanguageCache.keys().next().value;
     if (oldestKey) {
@@ -322,7 +348,7 @@ const QUERIES: Record<string, LangQueries> = {
     inherits: ``,
     variables: `
       (let_declaration pattern: (identifier) @var.name)
-      (const_declaration name: (identifier) @var.name)
+      (const_item name: (identifier) @var.name)
     `,
   },
 
@@ -370,7 +396,7 @@ const QUERIES: Record<string, LangQueries> = {
       (class_declaration (base_clause (name) @inherit.base))
     `,
     variables: `
-      (variable_declaration (variable_name (name) @var.name))
+      (variable_name (name) @var.name)
     `,
   },
 
@@ -655,13 +681,24 @@ self.onmessage = async (e) => {
       indexOptions = { ...indexOptions, ...e.data.options };
     }
     try {
+      const pmStart = (performance as any).memory;
+      const initialMem = pmStart ? `${(pmStart.usedJSHeapSize / 1048576).toFixed(1)} MB` : "N/A";
+      let totalRawBytes = 0;
+      for (const f of pendingFileQueue) {
+        totalRawBytes += f.content.length;
+      }
+      console.log(`[Diagnostic] ==========================================`);
+      console.log(`[Diagnostic] STARTING BROWSER INDEXING PIPELINE`);
+      console.log(`[Diagnostic] Total Files Queued: ${totalFiles}`);
+      console.log(`[Diagnostic] Total Raw Code Size: ${(totalRawBytes / 1048576).toFixed(2)} MB`);
+      console.log(`[Diagnostic] Initial JS Heap Memory: ${initialMem}`);
+      console.log(`[Diagnostic] Options: ${JSON.stringify(indexOptions)}`);
+      console.log(`[Diagnostic] ==========================================`);
+
       await initParser();
-      // Compute common path prefix BEFORE building any nodes, so folder
-      // nodes only represent repo-relative segments (e.g. "src", "lib").
       repoRootPrefix = computeCommonPrefix(pendingFileQueue.map(f => f.path));
       repoId = addNode("Repository", "Repository", "root", 15);
       
-      // Sort the queue by language extension so files of the same language are parsed contiguously in batches
       pendingFileQueue.sort((a, b) => {
         const extA = a.path.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || '';
         const extB = b.path.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || '';
@@ -670,6 +707,7 @@ self.onmessage = async (e) => {
 
       processNextBatch();
     } catch (err: any) {
+      console.error(`[Diagnostic] Fatal Error during startup:`, err);
       self.postMessage({ type: 'ERROR', payload: err.message });
     }
   }
@@ -704,15 +742,34 @@ function resolveSymbol(key: string, callerFile?: string): number | undefined {
 async function processNextBatch() {
   if (pendingFileQueue.length === 0) {
     // Cross-linking phase
+    console.log(`[Diagnostic] ==========================================`);
+    console.log(`[Diagnostic] ENTERING HIGH-FIDELITY SEMANTIC LINKING PHASE`);
+    console.log(`[Diagnostic] Total Nodes Created: ${nodes.length}`);
+    console.log(`[Diagnostic] Total Containment Links: ${links.length}`);
+    console.log(`[Diagnostic] Symbol Index Size: ${nodeSymbolIndex.size} entries`);
+    console.log(`[Diagnostic] File Call Sites Map Size: ${fileCalls.size} callers`);
+    console.log(`[Diagnostic] Class Inheritance Map Size: ${inheritances.size} classes`);
+    const pmLinkStart = (performance as any).memory;
+    if (pmLinkStart) {
+      console.log(`[Diagnostic] Heap Memory Pre-Linking: ${(pmLinkStart.usedJSHeapSize / 1048576).toFixed(1)} MB`);
+    }
+
+    const tStart = performance.now();
     self.postMessage({ type: 'PROGRESS', payload: { msg: "Building high-fidelity relationships...", percent: 95 } });
     await new Promise(r => setTimeout(r, 0));
 
     const MAX_CALL_EDGES = 50000;
     let callsAdded = 0;
+    let callsScanned = 0;
+    
     for (const [callerId, calls] of fileCalls.entries()) {
-      if (callsAdded >= MAX_CALL_EDGES) break;
+      if (callsAdded >= MAX_CALL_EDGES) {
+        console.warn(`[Diagnostic] [Warning] Reached MAX_CALL_EDGES (${MAX_CALL_EDGES}) limit! Truncating call relationships.`);
+        break;
+      }
       const callerFile = nodes[callerId - 1]?.file;
       for (const calledName of calls) {
+        callsScanned++;
         const targetId = resolveSymbol(`Function:${calledName}`, callerFile) ||
           resolveSymbol(`Class:${calledName}`, callerFile) ||
           resolveSymbol(calledName, callerFile);
@@ -723,13 +780,25 @@ async function processNextBatch() {
         }
       }
     }
+    
+    let inheritsAdded = 0;
     for (const [classId, bases] of inheritances.entries()) {
       const classFile = nodes[classId - 1]?.file;
       for (const baseName of bases) {
         const targetId = resolveSymbol(`Class:${baseName}`, classFile) || resolveSymbol(baseName, classFile);
-        if (targetId) links.push({ source: classId, target: targetId, type: 'INHERITS' });
+        if (targetId) {
+          links.push({ source: classId, target: targetId, type: 'INHERITS' });
+          inheritsAdded++;
+        }
       }
     }
+
+    const tEnd = performance.now();
+    console.log(`[Diagnostic] Semantic Linking Complete in ${(tEnd - tStart).toFixed(1)} ms`);
+    console.log(`[Diagnostic] Calls Scanned: ${callsScanned}, Calls Added: ${callsAdded}`);
+    console.log(`[Diagnostic] Inherits Added: ${inheritsAdded}`);
+    console.log(`[Diagnostic] Final Links Array Length: ${links.length}`);
+    console.log(`[Diagnostic] ==========================================`);
 
     const pm = (performance as any).memory;
     if (pm) {
@@ -743,7 +812,10 @@ async function processNextBatch() {
   }
 
   // Smaller batch = less peak memory per tick; GC gets more breathing room
-  const batch = pendingFileQueue.splice(0, 80);
+  const tBatchStart = performance.now();
+  const batchSize = 80;
+  const batch = pendingFileQueue.splice(0, batchSize);
+  const currentBatchNum = Math.ceil(processedCount / batchSize) + 1;
 
   for (let i = 0; i < batch.length; i++) {
     const f = batch[i];
@@ -763,12 +835,16 @@ async function processNextBatch() {
 
     const isPathIgnored = f.path.split(/[\/\\]/).some(part => IGNORED_DIRS.has(part));
 
-    // Skip large files and cache directories; tighter limit now we parse more languages
-    if (f.content.length > 200000 || isPathIgnored) continue;
+    if (f.content.length > 200000 || isPathIgnored) {
+      if (f.content.length > 200000) {
+        console.warn(`[Diagnostic] Skipping very large file (${(f.content.length / 1024).toFixed(1)} KB): ${f.path}`);
+      }
+      continue;
+    }
 
-    // Memory pressure guard: if heap > 900 MB yield an extra tick to let GC run
     const pm2 = (performance as any).memory;
     if (pm2 && pm2.usedJSHeapSize > 900 * 1048576) {
+      console.warn(`[Diagnostic] High memory pressure detected (${(pm2.usedJSHeapSize / 1048576).toFixed(1)} MB). Yielding worker execution to allow GC.`);
       await new Promise(r => setTimeout(r, 0));
     }
 
@@ -915,13 +991,18 @@ async function processNextBatch() {
         }
       }
     } catch (e) {
-      console.warn(`[parser.worker] Failed parsing or executing queries on ${f.path}:`, e);
+      console.warn(`[Diagnostic] Failed parsing or executing queries on ${f.path}:`, e);
     } finally {
       if (tree) {
         try { tree.delete(); } catch (e) { }
       }
     }
   }
+
+  const pmBatchEnd = (performance as any).memory;
+  const batchMem = pmBatchEnd ? `${(pmBatchEnd.usedJSHeapSize / 1048576).toFixed(1)} MB` : "N/A";
+  const duration = performance.now() - tBatchStart;
+  console.log(`[Diagnostic] Batch ${currentBatchNum} processed in ${duration.toFixed(1)}ms. Heap: ${batchMem}. Active nodes: ${nodes.length}, links: ${links.length}. Queue remaining: ${pendingFileQueue.length}`);
 
   // Yield to worker event loop
   setTimeout(processNextBatch, 0);

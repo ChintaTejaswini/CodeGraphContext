@@ -482,16 +482,28 @@ self.onmessage = async (e: MessageEvent) => {
   } else if (type === 'START') {
     indexOptions = e.data.options || {};
     try {
+      const pmStart = (performance as any).memory;
+      const initialMem = pmStart ? `${(pmStart.usedJSHeapSize / 1048576).toFixed(1)} MB` : "N/A";
+      let totalRawBytes = 0;
+      for (const f of pendingFileQueue) {
+        totalRawBytes += f.content.length;
+      }
+      console.log(`[Diagnostic-Pyodide] ==========================================`);
+      console.log(`[Diagnostic-Pyodide] STARTING PYODIDE-BASED SEMANTIC INDEXING PIPELINE`);
+      console.log(`[Diagnostic-Pyodide] Total Files Queued: ${totalFiles}`);
+      console.log(`[Diagnostic-Pyodide] Total Raw Code Size: ${(totalRawBytes / 1048576).toFixed(2)} MB`);
+      console.log(`[Diagnostic-Pyodide] Initial JS Heap Memory: ${initialMem}`);
+      console.log(`[Diagnostic-Pyodide] Options: ${JSON.stringify(indexOptions)}`);
+      console.log(`[Diagnostic-Pyodide] ==========================================`);
+
       self.postMessage({ type: 'PROGRESS', payload: { msg: "Initializing WASM Tree-sitter...", percent: 10 } });
       
-      // Start Pyodide load in background immediately
       startPyodideLoad().catch(err => {
-        console.warn("Background Pyodide load failed (will retry):", err);
+        console.warn("[Diagnostic-Pyodide] Background Pyodide load failed (will retry):", err);
       });
 
       await initParser();
 
-      // Count unique languages in queue to find prominent ones
       const counts = new Map<string, number>();
       for (const f of pendingFileQueue) {
         const extMatch = f.path.match(/\.([a-zA-Z0-9]+)$/);
@@ -528,14 +540,12 @@ self.onmessage = async (e: MessageEvent) => {
         }
       }
 
-      // Sort the queue by language extension so files of the same language are parsed contiguously in batches
       pendingFileQueue.sort((a, b) => {
         const extA = a.path.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || '';
         const extB = b.path.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase() || '';
         return extA.localeCompare(extB);
       });
 
-      // Pre-load ONLY the top 3 prominent languages to prevent initial memory crash
       const uniqueWasmNames = new Set<string>();
       const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
       for (let i = 0; i < Math.min(3, sorted.length); i++) {
@@ -543,12 +553,14 @@ self.onmessage = async (e: MessageEvent) => {
       }
 
       if (uniqueWasmNames.size > 0) {
+        console.log(`[Diagnostic-Pyodide] Pre-downloading prominent parsers: ${Array.from(uniqueWasmNames).join(', ')}`);
         self.postMessage({ type: 'PROGRESS', payload: { msg: `Downloading primary language parsers...`, percent: 12 } });
         await Promise.all(Array.from(uniqueWasmNames).map(name => getLanguageForWasmName(name)));
       }
 
       processNextBatch();
     } catch (err: any) {
+      console.error(`[Diagnostic-Pyodide] Startup Error:`, err);
       self.postMessage({ type: 'ERROR', payload: err.message });
     }
   }
@@ -557,19 +569,34 @@ self.onmessage = async (e: MessageEvent) => {
 async function processNextBatch() {
   if (pendingFileQueue.length === 0) {
     // Standard JS-native parsing completed, now compile with Python WASM
+    console.log(`[Diagnostic-Pyodide] ==========================================`);
+    console.log(`[Diagnostic-Pyodide] JS-BASED AST PARSING BATCHES COMPLETE`);
+    console.log(`[Diagnostic-Pyodide] Accumulated Parsed Files Data: ${parsedFilesData.length} records`);
+    const pmASTDone = (performance as any).memory;
+    if (pmASTDone) {
+      console.log(`[Diagnostic-Pyodide] JS Heap Memory after AST parsing: ${(pmASTDone.usedJSHeapSize / 1048576).toFixed(1)} MB`);
+    }
+    console.log(`[Diagnostic-Pyodide] SPINNING UP PYTHON WASM (PYODIDE) GRAPH ENGINE...`);
+    console.log(`[Diagnostic-Pyodide] ==========================================`);
     self.postMessage({ type: 'PROGRESS', payload: { msg: "Spinning up Deep Python Engine...", percent: 70 } });
     await runPythonEngine();
     return;
   }
 
-  const batch = pendingFileQueue.splice(0, 80);
+  const tBatchStart = performance.now();
+  const batchSize = 80;
+  const batch = pendingFileQueue.splice(0, batchSize);
+  const currentBatchNum = Math.ceil(processedCount / batchSize) + 1;
+
   for (const f of batch) {
     processedCount++;
     if (processedCount % 25 === 0) {
+      const pm = (performance as any).memory;
+      const memStr = pm ? ` [RAM: ${(pm.usedJSHeapSize / 1048576).toFixed(1)}MB]` : "";
       self.postMessage({
         type: 'PROGRESS',
         payload: {
-          msg: `Parsing syntax tree: ${f.path.split('/').pop()}`,
+          msg: `Parsing syntax tree: ${f.path.split('/').pop()}${memStr}`,
           percent: 10 + Math.floor((processedCount / totalFiles) * 55)
         }
       });
@@ -740,22 +767,41 @@ async function processNextBatch() {
 
       parsedFilesData.push(fileData);
     } catch (err) {
-      console.warn("Parse failure for file:", f.path, err);
+      console.warn(`[Diagnostic-Pyodide] Parse failure for file: ${f.path}`, err);
     }
   }
+
+  const pmBatchEnd = (performance as any).memory;
+  const batchMem = pmBatchEnd ? `${(pmBatchEnd.usedJSHeapSize / 1048576).toFixed(1)} MB` : "N/A";
+  const duration = performance.now() - tBatchStart;
+  console.log(`[Diagnostic-Pyodide] Batch ${currentBatchNum} processed in ${duration.toFixed(1)}ms. Heap: ${batchMem}. Parsed files count: ${parsedFilesData.length}. Queue remaining: ${pendingFileQueue.length}`);
 
   // Next iteration
   setTimeout(processNextBatch, 0);
 }
 
 async function runPythonEngine() {
+  const tEngineStart = performance.now();
   try {
+    const tPyodideStart = performance.now();
     pyodideInstance = await startPyodideLoad();
+    const tPyodideEnd = performance.now();
+    console.log(`[Diagnostic-Pyodide] Pyodide environment loaded and ready in ${(tPyodideEnd - tPyodideStart).toFixed(1)} ms`);
 
     self.postMessage({ type: 'PROGRESS', payload: { msg: "Running cross-file semantic analysis...", percent: 85 } });
 
     // Inject our data and Python compilation engine
-    pyodideInstance.globals.set("FILES_DATA_JSON", JSON.stringify(parsedFilesData));
+    const jsonStart = performance.now();
+    const jsonStr = JSON.stringify(parsedFilesData);
+    const jsonEnd = performance.now();
+    console.log(`[Diagnostic-Pyodide] Serialized files data to JSON in ${(jsonEnd - jsonStart).toFixed(1)} ms. JSON String Length: ${(jsonStr.length / 1024 / 1024).toFixed(2)} MB`);
+
+    const pmPrePy = (performance as any).memory;
+    if (pmPrePy) {
+      console.log(`[Diagnostic-Pyodide] JS Heap Memory pre-inject: ${(pmPrePy.usedJSHeapSize / 1048576).toFixed(1)} MB`);
+    }
+
+    pyodideInstance.globals.set("FILES_DATA_JSON", jsonStr);
     
     // Core Python Resolution Engine (mirrors desktop cgc linking logic exactly)
     const pythonScript = `
@@ -919,12 +965,24 @@ def build_graph(files_str):
 build_graph(FILES_DATA_JSON)
 `;
 
+    const pyRunStart = performance.now();
     const finalResult = pyodideInstance.runPython(pythonScript);
+    const pyRunEnd = performance.now();
+    console.log(`[Diagnostic-Pyodide] Pyodide build_graph python script executed in ${(pyRunEnd - pyRunStart).toFixed(1)} ms`);
+
+    const jsonParseStart = performance.now();
     const graphData = JSON.parse(finalResult);
+    const jsonParseEnd = performance.now();
+    console.log(`[Diagnostic-Pyodide] Parsed final graph JSON in ${(jsonParseEnd - jsonParseStart).toFixed(1)} ms`);
+    console.log(`[Diagnostic-Pyodide] Pyodide Output Graph: ${graphData.nodes.length} nodes, ${graphData.links.length} links`);
+
+    const totalDuration = performance.now() - tEngineStart;
+    console.log(`[Diagnostic-Pyodide] Pyodide Semantic linking pipeline finished successfully in ${totalDuration.toFixed(1)} ms`);
 
     self.postMessage({ type: 'PROGRESS', payload: { msg: "Finalizing data structures...", percent: 100 } });
     self.postMessage({ type: 'DONE', payload: graphData });
   } catch (err: any) {
+    console.error(`[Diagnostic-Pyodide] CRITICAL ERROR IN PYODIDE GRAPH RESOLUTION PIPELINE:`, err);
     self.postMessage({ type: 'ERROR', payload: err.message });
   }
 }
