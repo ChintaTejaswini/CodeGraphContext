@@ -16,10 +16,12 @@ def _github_headers() -> dict:
         headers["Authorization"] = f"token {token}"
     return headers
 
-GITHUB_ORG = "CodeGraphContext"
-GITHUB_REPO = "CodeGraphContext"
-REGISTRY_API_URL = f"https://api.github.com/repos/{GITHUB_ORG}/{GITHUB_REPO}/releases"
-MANIFEST_URL = f"https://github.com/{GITHUB_ORG}/{GITHUB_REPO}/releases/download/on-demand-bundles/manifest.json"
+def _get_manifest_url() -> str:
+    import os
+    hf_repo = os.environ.get("HF_REGISTRY_REPO") or "codegraphcontext/bundles"
+    return f"https://huggingface.co/datasets/{hf_repo}/raw/main/manifest.json"
+
+REGISTRY_API_URL = "https://api.github.com/repos/CodeGraphContext/CodeGraphContext/releases"
 
 class BundleRegistry:
     """
@@ -38,7 +40,7 @@ class BundleRegistry:
         
         # 1. Fetch on-demand bundles from manifest
         try:
-            response = requests.get(MANIFEST_URL, headers=_github_headers(), timeout=10)
+            response = requests.get(_get_manifest_url(), headers=_github_headers(), timeout=10)
             if response.status_code == 200:
                 manifest = response.json()
                 if manifest.get('bundles'):

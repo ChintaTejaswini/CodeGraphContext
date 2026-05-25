@@ -123,8 +123,9 @@ export default async function handler(req: any, res: any) {
 
         // Check if bundle already exists in manifest
         try {
+            const hfRepo = process.env.HF_REGISTRY_REPO || 'codegraphcontext/bundles';
             const manifestResponse = await fetch(
-                `https://github.com/${process.env.GITHUB_REPOSITORY || 'CodeGraphContext/CodeGraphContext'}/releases/download/on-demand-bundles/manifest.json`
+                `https://huggingface.co/datasets/${hfRepo}/raw/main/manifest.json`
             );
 
             if (manifestResponse.ok) {

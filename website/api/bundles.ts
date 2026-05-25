@@ -10,7 +10,7 @@ export default async function handler(req: any, res: any) {
 
         const allBundles: any[] = [];
 
-        // 1. Fetch community bundles from Hugging Face manifest
+        // 1. Fetch community and server bundles from Hugging Face manifest
         try {
             const hfRepo = process.env.HF_REGISTRY_REPO || 'codegraphcontext/bundles';
             const manifestUrl = `https://huggingface.co/datasets/${hfRepo}/raw/main/manifest.json`;
@@ -21,13 +21,14 @@ export default async function handler(req: any, res: any) {
                 if (manifest.bundles && Array.isArray(manifest.bundles)) {
                     allBundles.push(...manifest.bundles.map((b: any) => ({
                         ...b,
-                        category: 'Community',
-                        source: 'community'
+                        name: b.repo ? b.repo.split('/')[1] : b.name || 'unknown',
+                        category: b.source === 'server-indexed' ? 'Server' : 'Community',
+                        source: b.source || 'community'
                     })));
                 }
             }
         } catch (err) {
-            console.log('No community manifest found on Hugging Face:', err);
+            console.log('No manifest found on Hugging Face:', err);
         }
 
         // 1.5. Fetch server-indexed bundles from GitHub Releases manifest

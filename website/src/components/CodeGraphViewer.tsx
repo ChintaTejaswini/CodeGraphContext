@@ -10,7 +10,7 @@ import {
   ChevronRight, ChevronDown, Folder, FolderOpen,
   PanelLeftClose, PanelLeftOpen,
   Layers, Check, X, Code2, Sun, Moon, ChevronUp, Route,
-  Download, UploadCloud, Menu
+  Download, UploadCloud, Menu, MessageSquare
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "next-themes";
@@ -1478,6 +1478,19 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
               Publish
             </button>
 
+            {/* ChatGPT Tunnel Button */}
+            <a
+              href="https://chatgpt.com/g/g-6a1368599210819199a1c47d021020b6-codegraphcontext"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+              title="Keep this tab open in background so ChatGPT can query this workspace!"
+            >
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_6px_#10b981]" />
+              <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
+              ChatGPT
+            </a>
+
             {/* Mode Selector Dropdown */}
             <div ref={modeMenuRef} className="relative">
               <button
@@ -1579,6 +1592,19 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
                   <UploadCloud className="w-3.5 h-3.5 text-green-400" />
                   Publish Graph
                 </button>
+
+                {/* Mobile ChatGPT Tunnel */}
+                <a
+                  href="https://chatgpt.com/g/g-6a1368599210819199a1c47d021020b6-codegraphcontext"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setShowMobileMenu(false)}
+                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-xl transition-all text-left w-full ${isDark ? 'hover:bg-white/5 border-white/5 text-white' : 'hover:bg-black/5 border-black/5 text-gray-800'}`}
+                >
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_6px_#10b981]" />
+                  <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
+                  ChatGPT Tunnel
+                </a>
 
                 {/* Mobile Mode Selector */}
                 <div className="border-t border-white/5 my-0.5" />
@@ -1773,27 +1799,6 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
             className="absolute bottom-6 z-[60] flex flex-col gap-4 pointer-events-none items-end max-w-xs md:max-w-sm"
             style={{ right: (selectedFile && dimensions.width >= 768) ? codePanelWidth + 24 : 24 }}
           >
-            {/* Elegant Floating Tunnel Online Glassmorphism Card */}
-            <div className="pointer-events-auto bg-black/75 border border-white/10 dark:border-white/20 rounded-2xl p-4 backdrop-blur-md shadow-2xl max-w-xs transition-all hover:border-purple-500/50">
-              <div className="flex flex-col gap-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]" />
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">Tunnel Online</span>
-                </div>
-                <p className="text-xs text-gray-300 leading-normal font-medium font-sans">
-                  Keep this tab open in the background so your LLM agents can query this workspace!
-                </p>
-                <a 
-                  href="https://chatgpt.com/g/g-6a1368599210819199a1c47d021020b6-codegraphcontext" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center gap-1.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white font-semibold text-xs py-2 px-3 rounded-xl transition-all shadow-lg font-sans"
-                >
-                  🚀 Open CGC ChatGPT
-                </a>
-              </div>
-            </div>
-
             {/* Legend Overlay */}
             <div
               className={`pointer-events-auto backdrop-blur-3xl border rounded-2xl shadow-2xl ${isDark ? 'bg-black/50 border-white/10' : 'bg-white/80 border-black/10'}`}

@@ -62,21 +62,80 @@ const fetchWithFallbackProxies = async (url: string): Promise<Response> => {
   }
   
   const proxies = [
-    (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    (u: string) => `https://thingproxy.freeboard.io/fetch/${u}`
+    // Proxy 1: corsproxy.io (Very fast, prefix-based)
+    {
+      url: (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+      type: 'direct' as const
+    },
+    // Proxy 2: CodeTabs (Fast and supports redirects well)
+    {
+      url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+      type: 'direct' as const
+    },
+    // Proxy 3: allorigins.win JSON endpoint (Handles S3 redirects perfectly via server-side base64 encoding!)
+    {
+      url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+      type: 'json-base64' as const
+    },
+    // Proxy 4: allorigins.win raw (Alternative fallback)
+    {
+      url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+      type: 'direct' as const
+    },
+    // Proxy 5: thingproxy.freeboard.io (Fallback proxy)
+    {
+      url: (u: string) => `https://thingproxy.freeboard.io/fetch/${u}`,
+      type: 'direct' as const
+    }
   ];
 
   let lastError: any = null;
   for (const proxy of proxies) {
     try {
-      const res = await fetch(proxy(url));
-      if (res.ok) return res;
+      const proxiedUrl = proxy.url(url);
+      console.log(`[Proxy] Attempting fetch: ${proxiedUrl}`);
+      
+      if (proxy.type === 'json-base64') {
+        const res = await fetch(proxiedUrl);
+        if (!res.ok) {
+          console.warn(`[Proxy] Status ${res.status} received. Trying next proxy...`);
+          continue;
+        }
+        const json = await res.json();
+        if (!json || !json.contents) {
+          throw new Error("No contents returned from JSON CORS proxy.");
+        }
+        
+        const base64Data = json.contents;
+        const commaIndex = base64Data.indexOf(',');
+        const base64String = commaIndex !== -1 ? base64Data.substring(commaIndex + 1) : base64Data;
+        
+        const binaryString = atob(base64String);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        return new Response(bytes.buffer, {
+          status: 200,
+          headers: { 'Content-Type': 'application/octet-stream' }
+        });
+      } else {
+        const res = await fetch(proxiedUrl);
+        if (res.ok) return res;
+        if (res.status === 403 || res.status === 429) {
+          console.warn(`[Proxy] Status ${res.status} received. Trying next proxy...`);
+          continue;
+        }
+        return res;
+      }
     } catch (err) {
       lastError = err;
+      console.warn("[Proxy] Connection failed, trying next fallback proxy...", err);
     }
   }
-  throw lastError || new Error("Failed to fetch via proxies");
+  throw lastError || new Error("Failed to fetch via all available CORS proxies.");
 };
 
 export default function LocalUploader({ onComplete, plain }: { onComplete: (data: unknown) => void, plain?: boolean }) {

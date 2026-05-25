@@ -242,26 +242,80 @@ const Explore = () => {
     }
 
     const proxies = [
-      // Proxy 1: corsproxy.io (Very fast, but sometimes blocks large zips)
-      (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-      // Proxy 2: allorigins.win (Extremely reliable for release assets & large archives)
-      (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-      // Proxy 3: thingproxy.freeboard.io (Fallback proxy)
-      (u: string) => `https://thingproxy.freeboard.io/fetch/${u}`
+      // Proxy 1: corsproxy.io (Very fast, prefix-based)
+      {
+        url: (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        type: 'direct' as const
+      },
+      // Proxy 2: CodeTabs (Fast and supports redirects well)
+      {
+        url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+        type: 'direct' as const
+      },
+      // Proxy 3: allorigins.win JSON endpoint (Handles S3 redirects perfectly via server-side base64 encoding!)
+      {
+        url: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+        type: 'json-base64' as const
+      },
+      // Proxy 4: allorigins.win raw (Alternative fallback)
+      {
+        url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        type: 'direct' as const
+      },
+      // Proxy 5: thingproxy.freeboard.io (Fallback proxy)
+      {
+        url: (u: string) => `https://thingproxy.freeboard.io/fetch/${u}`,
+        type: 'direct' as const
+      }
     ];
 
     let lastError: any = null;
     for (const proxy of proxies) {
       try {
-        const proxiedUrl = proxy(url);
+        const proxiedUrl = proxy.url(url);
         console.log(`[Proxy] Attempting fetch: ${proxiedUrl}`);
-        const res = onProgress ? await fetchWithProgress(proxiedUrl, onProgress) : await fetch(proxiedUrl);
-        if (res.ok) return res;
-        if (res.status === 403 || res.status === 429) {
-          console.warn(`[Proxy] Status ${res.status} received. Trying next proxy...`);
-          continue;
+        
+        if (proxy.type === 'json-base64') {
+          // JSON-Base64 Proxy logic (perfect for binary files & redirects)
+          const res = await fetch(proxiedUrl);
+          if (!res.ok) {
+            console.warn(`[Proxy] Status ${res.status} received. Trying next proxy...`);
+            continue;
+          }
+          const json = await res.json();
+          if (!json || !json.contents) {
+            throw new Error("No contents returned from JSON CORS proxy.");
+          }
+          
+          const base64Data = json.contents;
+          const commaIndex = base64Data.indexOf(',');
+          const base64String = commaIndex !== -1 ? base64Data.substring(commaIndex + 1) : base64Data;
+          
+          const binaryString = atob(base64String);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          
+          if (onProgress) {
+            onProgress(len, len); // trigger full complete progress
+          }
+          
+          return new Response(bytes.buffer, {
+            status: 200,
+            headers: { 'Content-Type': 'application/octet-stream' }
+          });
+        } else {
+          // Direct Proxy logic
+          const res = onProgress ? await fetchWithProgress(proxiedUrl, onProgress) : await fetch(proxiedUrl);
+          if (res.ok) return res;
+          if (res.status === 403 || res.status === 429) {
+            console.warn(`[Proxy] Status ${res.status} received. Trying next proxy...`);
+            continue;
+          }
+          return res;
         }
-        return res; // Return regular errors (like 404) directly to avoid looping
       } catch (err) {
         lastError = err;
         console.warn("[Proxy] Connection failed, trying next fallback proxy...", err);
