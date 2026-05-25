@@ -77,6 +77,7 @@ export default async function handler(req: any, res: any) {
                 "application/json": {
                   schema: {
                     type: "object",
+                    properties: {},
                     additionalProperties: true
                   }
                 }
@@ -106,6 +107,7 @@ export default async function handler(req: any, res: any) {
                 "application/json": {
                   schema: {
                     type: "object",
+                    properties: {},
                     additionalProperties: true
                   }
                 }
@@ -135,6 +137,7 @@ export default async function handler(req: any, res: any) {
                 "application/json": {
                   schema: {
                     type: "object",
+                    properties: {},
                     additionalProperties: true
                   }
                 }
@@ -171,6 +174,7 @@ export default async function handler(req: any, res: any) {
                 "application/json": {
                   schema: {
                     type: "object",
+                    properties: {},
                     additionalProperties: true
                   }
                 }
@@ -207,6 +211,7 @@ export default async function handler(req: any, res: any) {
                 "application/json": {
                   schema: {
                     type: "object",
+                    properties: {},
                     additionalProperties: true
                   }
                 }
@@ -236,6 +241,7 @@ export default async function handler(req: any, res: any) {
                 "application/json": {
                   schema: {
                     type: "object",
+                    properties: {},
                     additionalProperties: true
                   }
                 }
