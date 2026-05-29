@@ -8,6 +8,7 @@ pytest.importorskip("kuzu")
 
 from codegraphcontext.core.database_kuzu import KuzuDBManager
 from codegraphcontext.core.jobs import JobManager, JobStatus
+from codegraphcontext.tools.advanced_language_query_tool import Advanced_language_query
 from codegraphcontext.tools.graph_builder import GraphBuilder
 from codegraphcontext.utils.tree_sitter_manager import get_tree_sitter_manager
 
@@ -110,5 +111,14 @@ def test_elisp_fixture_indexes_end_to_end_with_kuzu(
                 ("foo-ui-render", "foo-core-greet"),
                 ("foo-ui-render", "foo-ui-after-render"),
             }.issubset({(row["caller_name"], row["callee_name"]) for row in calls})
+
+        advanced_query = Advanced_language_query(manager).advanced_language_query(
+            "elisp", "function"
+        )
+        assert advanced_query["success"] is True
+        assert {
+            "foo-core-greet",
+            "foo-ui-render",
+        }.issubset({row["name"] for row in advanced_query["results"]})
     finally:
         manager.close_driver()
