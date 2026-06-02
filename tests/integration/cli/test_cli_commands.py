@@ -261,7 +261,8 @@ def cli_test_stubs(monkeypatch, tmp_path):
 
     fake_db = _FakeDBManager()
     monkeypatch.setattr(cli_main, "_initialize_services", lambda *_args, **_kwargs: (fake_db, _FakeGraphBuilder(), _FakeCodeFinder(), MagicMock()))
-    monkeypatch.setattr(cli_main.DatabaseManager, "test_connection", staticmethod(lambda *_args, **_kwargs: (True, None)))
+    import codegraphcontext.core.database as core_database
+    monkeypatch.setattr(core_database.DatabaseManager, "test_connection", staticmethod(lambda *_args, **_kwargs: (True, None)))
     monkeypatch.setattr(cli_main.typer, "confirm", lambda *_args, **_kwargs: True)
 
     class _FakeMCPServer:
