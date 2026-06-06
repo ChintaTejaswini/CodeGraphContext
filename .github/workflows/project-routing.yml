@@ -3,12 +3,8 @@ name: Route Issues
 on:
   issues:
     types: [labeled]
-
-# Note on permissions:
-# - Default GITHUB_TOKEN may not have organization permissions to read team members or request reviews.
-# - If you get "Not Found" or "Forbidden" errors when querying org teams, you can pass a custom 
-#   Personal Access Token (PAT) with "read:org" permissions, or configure a GitHub App token.
-# - To use a PAT, change github-token input below to: github-token: ${{ secrets.YOUR_PAT_SECRET }}
+  pull_request:
+    types: [labeled]
 
 jobs:
   route:
@@ -26,11 +22,9 @@ jobs:
           script: |
             const labelName = context.payload.label.name;
             const label = labelName.toLowerCase();
-            const isPullRequest = !!context.payload.issue?.pull_request || !!context.payload.pull_request;
             const contentId = context.payload.issue?.node_id || context.payload.pull_request?.node_id;
 
             console.log(`Processing label: "${labelName}"`);
-            console.log(`Associated with PR? ${isPullRequest}`);
 
             // Resilient helper to fetch Project V2 metadata by number
             async function getProjectMetadata(org, number) {
@@ -135,7 +129,7 @@ jobs:
                 }
                 console.log(`Found Status option: "${targetOption.name}" (ID: ${targetOption.id})`);
 
-                // 3. Find if the issue is already an item in project #3
+                // 3. Find if the issue/PR is already an item in project #3
                 const checkQuery = `
                   query($nodeId: ID!) {
                     node(id: $nodeId) {
@@ -171,9 +165,9 @@ jobs:
                 let itemId = null;
                 if (matchedItem) {
                   itemId = matchedItem.id;
-                  console.log(`Issue already in project #${projectNumber}. Item ID: ${itemId}`);
+                  console.log(`Item already in project #${projectNumber}. Item ID: ${itemId}`);
                 } else {
-                  console.log(`Issue not in project #${projectNumber}. Adding issue to project...`);
+                  console.log(`Item not in project #${projectNumber}. Adding to project...`);
                   const addMutation = `
                     mutation($projectId: ID!, $contentId: ID!) {
                       addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
@@ -186,10 +180,10 @@ jobs:
                   const addResult = await github.graphql(addMutation, { projectId: project.id, contentId });
                   itemId = addResult.addProjectV2ItemById?.item?.id;
                   if (!itemId) {
-                    console.error('Failed to add issue to project board.');
+                    console.error('Failed to add item to project board.');
                     return false;
                   }
-                  console.log(`Successfully added issue to project. New Item ID: ${itemId}`);
+                  console.log(`Successfully added item to project. New Item ID: ${itemId}`);
                 }
 
                 // 4. Update the Status field value
@@ -226,136 +220,29 @@ jobs:
               }
             }
 
-            // 1. Handle "blocked" label
-            if (label === 'blocked') {
-              const success = await updateProjectStatus('Blocked');
-              if (success) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `🚦 Updated Project Status to **Blocked**.`
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `⚠️ Attempted to update Project Status to **Blocked**, but no matching option or project was found.`
-                });
-              }
-            }
-
-            // 2. Handle team roles assignment based on docs/TEAM_ROLES.md (case-insensitive exact names)
-            let teamName = null;
-            let teamSlug = null;
+            // Map the lowercase label to the exact Status column name
             let projectStatusName = null;
 
             if (label === 'adminarchs') {
-              teamName = 'AdminArchs (Senior Maintainers & Core Architecture)';
-              teamSlug = 'adminarchs';
               projectStatusName = 'AdminArchs';
             } else if (label === 'devops') {
-              teamName = 'AdminArchs (Senior Maintainers & Core Architecture)';
-              teamSlug = 'adminarchs';
               projectStatusName = 'DevOps';
             } else if (label === 'pythondevs') {
-              teamName = 'PythonDevs (Core Engine Developers)';
-              teamSlug = 'pythondevs';
               projectStatusName = 'PythonDevs';
             } else if (label === 'aidevs') {
-              teamName = 'AIDevs (AI & Machine Learning Integration)';
-              teamSlug = 'aidevs';
               projectStatusName = 'AIDevs';
             } else if (label === 'webdevs') {
-              teamName = 'WebDevs (Frontend & UI/UX)';
-              teamSlug = 'webdevs';
               projectStatusName = 'WebDevs';
             } else if (label === 'extensiondevs') {
-              teamName = 'ExtensionDevs (IDE & Browser Integrations)';
-              teamSlug = 'extensiondevs';
               projectStatusName = 'ExtensionDevs';
             } else if (label === 'docsexperts') {
-              teamName = 'DocsExperts (Technical Writing & DevRel)';
-              teamSlug = 'docsexperts';
               projectStatusName = 'DocsExperts';
             } else if (label === 'testers') {
-              teamName = 'Testers (QA & Benchmarking)';
-              teamSlug = 'testers';
               projectStatusName = 'Testers';
+            } else if (label === 'blocked') {
+              projectStatusName = 'Blocked';
             }
 
-            if (teamSlug) {
-              console.log(`Routing to team: "${teamName}" (Slug: ${teamSlug})`);
-              
-              // Update Project Status field if applicable
-              if (projectStatusName) {
-                const projectSuccess = await updateProjectStatus(projectStatusName);
-                if (projectSuccess) {
-                  console.log(`Successfully transitioned project status to "${projectStatusName}"`);
-                }
-              }
-
-              // Tag the team via comment
-              const commentBody = `Assigning to the **${teamName}** team.\nCC: @${context.repo.owner}/${teamSlug}`;
-              try {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: commentBody
-                });
-                console.log('Successfully posted routing comment.');
-              } catch (error) {
-                console.error(`Failed to post comment: ${error.message}`);
-              }
-
-              // Request review if it's a Pull Request (via issue event payload, if applicable)
-              if (isPullRequest) {
-                try {
-                  await github.rest.pulls.requestReviewers({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    pull_number: context.issue.number,
-                    team_reviewers: [teamSlug]
-                  });
-                  console.log(`Requested review from team: ${teamSlug}`);
-                } catch (error) {
-                  console.warn(`Could not request team review (non-fatal): ${error.message}`);
-                }
-              }
-
-              // Attempt to assign the team's members to the issue
-              try {
-                const membersResponse = await github.rest.teams.listMembersInOrg({
-                  org: context.repo.owner,
-                  team_slug: teamSlug
-                });
-                const members = membersResponse.data.map(m => m.login);
-                if (members.length > 0) {
-                  await github.rest.issues.addAssignees({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: context.issue.number,
-                    assignees: members
-                  });
-                  console.log(`Assigned team members: ${members.join(', ')}`);
-                } else {
-                  console.log('No members found in this team to assign.');
-                }
-              } catch (error) {
-                console.warn(`Could not automatically assign team members (non-fatal): ${error.message}`);
-                if (error.status === 404) {
-                  console.log(`Team "${teamSlug}" not found in org "${context.repo.owner}". Listing all teams in the organization for troubleshooting...`);
-                  try {
-                    const teams = await github.rest.teams.list({
-                      org: context.repo.owner
-                    });
-                    const slugs = teams.data.map(t => t.slug);
-                    console.log(`Available teams: ${slugs.join(', ') || '(none)'}`);
-                  } catch (listError) {
-                    console.warn(`Could not list teams in org: ${listError.message}`);
-                  }
-                }
-              }
+            if (projectStatusName) {
+              await updateProjectStatus(projectStatusName);
             }
