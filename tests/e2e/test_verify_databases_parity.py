@@ -109,6 +109,8 @@ asyncio.run(main())
         print(f"[{db_type} STDERR]:\n{stderr.decode()}", file=sys.stderr)
         
     if proc.returncode != 0:
+        if db_type == "neo4j" and (b"Neo4jConnectionError" in stderr or b"failed to connect" in stderr.lower()):
+            raise ConnectionError("Neo4j connection failed to connect.")
         raise RuntimeError(f"Indexing process failed for {db_type} with exit code {proc.returncode}")
         
     # Extract stats from stdout

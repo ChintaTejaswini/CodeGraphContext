@@ -4,11 +4,11 @@
 
 🌐 **Languages:**
 - 🇬🇧 [English](README.md)
-- 🇨🇳 [中文](README.zh-CN.md)
-- 🇰🇷 [한국어](README.kor.md)
-- 🇺🇦 [Українська](README.uk.md)
-- 🇷🇺 [Русский](README.ru-RU.md)
-- 🇯🇵 [日本語](README.ja.md)
+- 🇨🇳 [中文](docs/translations/README.zh-CN.md)
+- 🇰🇷 [한국어](docs/translations/README.kor.md)
+- 🇺🇦 [Українська](docs/translations/README.uk.md)
+- 🇷🇺 [Русский](docs/translations/README.ru-RU.md)
+- 🇯🇵 [日本語](docs/translations/README.ja.md)
 - 🇪🇸 Español (Soon)
 
 🌍 **Help translate CodeGraphContext to your language by raising an issue & PR on https://github.com/Shashankss1205/CodeGraphContext/issues!**
@@ -474,7 +474,7 @@ Once the server is running, you can interact with it through your AI assistant u
 ## Contributing
 
 Contributions are welcome! 🎉  
-Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+Please see our [CONTRIBUTING.md](.github/CONTRIBUTING.md) for detailed guidelines.
 If you have ideas for new features, integrations, or improvements, open an [issue](https://github.com/CodeGraphContext/CodeGraphContext/issues) or submit a Pull Request.
 
 Join discussions and help shape the future of CodeGraphContext.
