@@ -26,41 +26,34 @@ jobs:
           script: |
             const labelName = context.payload.label.name;
             const label = labelName.toLowerCase();
-            const isPullRequest = !!context.payload.issue.pull_request;
+            const isPullRequest = !!context.payload.issue?.pull_request || !!context.payload.pull_request;
+            const contentId = context.payload.issue?.node_id || context.payload.pull_request?.node_id;
 
             console.log(`Processing label: "${labelName}"`);
             console.log(`Associated with PR? ${isPullRequest}`);
 
-            // Helper function to update project status
-            async function updateProjectStatus(targetStatusName) {
-              console.log(`Attempting to update project Status field to "${targetStatusName}"...`);
+            // Resilient helper to fetch Project V2 metadata by number
+            async function getProjectMetadata(org, number) {
               try {
                 const query = `
-                  query($nodeId: ID!) {
-                    node(id: $nodeId) {
-                      ... on Issue {
-                        projectItems(first: 10) {
+                  query($org: String!, $number: Int!) {
+                    organization(login: $org) {
+                      projectV2(number: $number) {
+                        id
+                        title
+                        fields(first: 50) {
                           nodes {
-                            id
-                            project {
+                            ... on ProjectV2FieldCommon {
                               id
-                              title
-                              fields(first: 50) {
-                                nodes {
-                                  ... on ProjectV2FieldCommon {
-                                    id
-                                    name
-                                    dataType
-                                  }
-                                  ... on ProjectV2SingleSelectField {
-                                    id
-                                    name
-                                    options {
-                                      id
-                                      name
-                                    }
-                                  }
-                                }
+                              name
+                              dataType
+                            }
+                            ... on ProjectV2SingleSelectField {
+                              id
+                              name
+                              options {
+                                id
+                                name
                               }
                             }
                           }
@@ -69,70 +62,166 @@ jobs:
                     }
                   }
                 `;
-
-                const variables = { nodeId: context.payload.issue.node_id };
-                const result = await github.graphql(query, variables);
-                const projectItems = result.node?.projectItems?.nodes || [];
-
-                if (projectItems.length === 0) {
-                  console.log('No projects associated with this issue.');
-                  return false;
-                }
-
-                let updatedCount = 0;
-                for (const item of projectItems) {
-                  console.log(`Found project: "${item.project.title}" (ID: ${item.project.id})`);
-                  
-                  // Find single-select Status field
-                  const statusField = item.project.fields.nodes.find(
-                    f => f.name.toLowerCase() === 'status' && f.options
-                  );
-
-                  if (statusField) {
-                    const targetOption = statusField.options.find(
-                      opt => opt.name.toLowerCase() === targetStatusName.toLowerCase()
-                    );
-
-                    if (targetOption) {
-                      console.log(`Found option "${targetOption.name}" (ID: ${targetOption.id}) on field "${statusField.name}"`);
-                      
-                      const mutation = `
-                        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                          updateProjectV2ItemFieldValue(
-                            input: {
-                              projectId: $projectId
-                              itemId: $itemId
-                              fieldId: $fieldId
-                              value: {
-                                singleSelectOptionId: $optionId
+                const result = await github.graphql(query, { org, number });
+                return result.organization?.projectV2;
+              } catch (e) {
+                console.log(`Failed to fetch project as organization, trying as user: ${e.message}`);
+                try {
+                  const query = `
+                    query($user: String!, $number: Int!) {
+                      user(login: $user) {
+                        projectV2(number: $number) {
+                          id
+                          title
+                          fields(first: 50) {
+                            nodes {
+                              ... on ProjectV2FieldCommon {
+                                id
+                                name
+                                dataType
                               }
-                            }
-                          ) {
-                            projectV2Item {
-                              id
+                              ... on ProjectV2SingleSelectField {
+                                id
+                                name
+                                options {
+                                  id
+                                  name
+                                }
+                              }
                             }
                           }
                         }
-                      `;
-
-                      await github.graphql(mutation, {
-                        projectId: item.project.id,
-                        itemId: item.id,
-                        fieldId: statusField.id,
-                        optionId: targetOption.id
-                      });
-                      console.log(`Successfully updated Status to "${targetOption.name}" on project "${item.project.title}".`);
-                      updatedCount++;
-                    } else {
-                      console.warn(`No option named "${targetStatusName}" found in the Status field for project "${item.project.title}".`);
+                      }
                     }
-                  } else {
-                    console.warn(`No single-select field named "Status" found in project "${item.project.title}".`);
-                  }
+                  `;
+                  const result = await github.graphql(query, { user: org, number });
+                  return result.user?.projectV2;
+                } catch (userError) {
+                  console.error(`Failed to fetch project as user: ${userError.message}`);
+                  return null;
                 }
-                return updatedCount > 0;
+              }
+            }
+
+            // Consolidated helper function to update project status, adding the issue/PR to the project if not present
+            async function updateProjectStatus(targetStatusName) {
+              const projectNumber = 3; // The project number from settings
+              const org = context.repo.owner;
+
+              console.log(`Attempting to update project #${projectNumber} Status field to "${targetStatusName}"...`);
+              try {
+                // 1. Fetch project metadata
+                const project = await getProjectMetadata(org, projectNumber);
+                if (!project) {
+                  console.warn(`Could not find project #${projectNumber} under "${org}".`);
+                  return false;
+                }
+                console.log(`Successfully fetched project details for "${project.title}" (ID: ${project.id})`);
+
+                // 2. Find the Status field and the target option
+                const statusField = project.fields.nodes.find(
+                  f => f.name.toLowerCase() === 'status' && f.options
+                );
+                if (!statusField) {
+                  console.warn(`No single-select field named "Status" found in project #${projectNumber}.`);
+                  return false;
+                }
+                const targetOption = statusField.options.find(
+                  opt => opt.name.toLowerCase() === targetStatusName.toLowerCase()
+                );
+                if (!targetOption) {
+                  console.warn(`No option named "${targetStatusName}" found in the Status field of project #${projectNumber}.`);
+                  return false;
+                }
+                console.log(`Found Status option: "${targetOption.name}" (ID: ${targetOption.id})`);
+
+                // 3. Find if the issue is already an item in project #3
+                const checkQuery = `
+                  query($nodeId: ID!) {
+                    node(id: $nodeId) {
+                      ... on Issue {
+                        projectItems(first: 10) {
+                          nodes {
+                            id
+                            project {
+                              id
+                              number
+                            }
+                          }
+                        }
+                      }
+                      ... on PullRequest {
+                        projectItems(first: 10) {
+                          nodes {
+                            id
+                            project {
+                              id
+                              number
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                const checkResult = await github.graphql(checkQuery, { nodeId: contentId });
+                const existingItems = checkResult.node?.projectItems?.nodes || [];
+                const matchedItem = existingItems.find(item => item.project.number === projectNumber);
+
+                let itemId = null;
+                if (matchedItem) {
+                  itemId = matchedItem.id;
+                  console.log(`Issue already in project #${projectNumber}. Item ID: ${itemId}`);
+                } else {
+                  console.log(`Issue not in project #${projectNumber}. Adding issue to project...`);
+                  const addMutation = `
+                    mutation($projectId: ID!, $contentId: ID!) {
+                      addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                        item {
+                          id
+                        }
+                      }
+                    }
+                  `;
+                  const addResult = await github.graphql(addMutation, { projectId: project.id, contentId });
+                  itemId = addResult.addProjectV2ItemById?.item?.id;
+                  if (!itemId) {
+                    console.error('Failed to add issue to project board.');
+                    return false;
+                  }
+                  console.log(`Successfully added issue to project. New Item ID: ${itemId}`);
+                }
+
+                // 4. Update the Status field value
+                const updateMutation = `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                    updateProjectV2ItemFieldValue(
+                      input: {
+                        projectId: $projectId
+                        itemId: $itemId
+                        fieldId: $fieldId
+                        value: {
+                          singleSelectOptionId: $optionId
+                        }
+                      }
+                    ) {
+                      projectV2Item {
+                        id
+                      }
+                    }
+                  }
+                `;
+                await github.graphql(updateMutation, {
+                  projectId: project.id,
+                  itemId,
+                  fieldId: statusField.id,
+                  optionId: targetOption.id
+                });
+                console.log(`Successfully updated project Status to "${targetOption.name}".`);
+                return true;
+
               } catch (error) {
-                console.error(`Error updating project field: ${error.message}`);
+                console.error(`Error in updateProjectStatus: ${error.message}`);
                 return false;
               }
             }
