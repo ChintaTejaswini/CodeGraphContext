@@ -1311,14 +1311,25 @@ class GraphWriter:
         info_logger(f"[SPRING_DATA] Written {written} READS/WRITES derived-query edges")
 
     def delete_repository_from_graph(self, repo_path: str) -> bool:
-        repo_path_str = repo_path
+        # Normalize path separators for cross-platform compatibility (Windows uses \)
+        repo_path_str = repo_path.replace("\\", "/")
         path_prefix = repo_path_str + "/"
         with self.driver.session() as session:
+            # Try normalized path first
             result = session.run(
                 "MATCH (r:Repository {path: $path}) RETURN count(r) as cnt", path=repo_path_str
             ).single()
             if not result or result["cnt"] == 0:
-                warning_logger(f"Attempted to delete non-existent repository: {repo_path_str}")
+                # Fallback: try original path (Windows backslash)
+                result = session.run(
+                    "MATCH (r:Repository {path: $path}) RETURN count(r) as cnt", path=repo_path
+                ).single()
+                # If found via original path, use original path for all subsequent operations
+                if result and result["cnt"] > 0:
+                    repo_path_str = repo_path
+                    path_prefix = repo_path + "\\"
+            if not result or result["cnt"] == 0:
+                warning_logger(f"Attempted to delete non-existent repository: {repo_path}")
                 return False
 
         for rel_type in ("CALLS", "INHERITS", "IMPORTS"):
