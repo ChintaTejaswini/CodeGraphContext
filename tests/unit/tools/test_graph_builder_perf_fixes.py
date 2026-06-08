@@ -519,7 +519,7 @@ class TestAddFileToGraph:
 
         import_call = next(
             c for c in session.calls
-            if "MERGE (f)-[r:IMPORTS]->(m)" in c["query"]
+            if "MERGE (f)-[r:IMPORTS {line_number: row.line_number}]->(m)" in c["query"]
         )
         assert "m.alias" not in import_call["query"]
         assert import_call["kwargs"]["batch"] == [

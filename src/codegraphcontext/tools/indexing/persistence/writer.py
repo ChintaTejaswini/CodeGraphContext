@@ -421,7 +421,11 @@ class GraphWriter:
                             }
                         )
                 else:
-                    module_name = imp.get("name") or imp.get("source")
+                    module_name = (
+                        imp.get("name")
+                        or imp.get("source")
+                        or imp.get("full_import_name")
+                    )
                     if not module_name:
                         continue
                     full_import_name = (
@@ -460,11 +464,10 @@ class GraphWriter:
                     UNWIND $batch AS row
                     MATCH (f:File {path: $file_path})
                     MERGE (m:Module {name: row.name})
-                    SET m.lang = coalesce(row.lang, m.lang),
-                        m.full_import_name = coalesce(row.full_import_name, m.full_import_name)
-                    MERGE (f)-[r:IMPORTS]->(m)
-                    SET r.line_number = row.line_number,
-                        r.alias = coalesce(row.alias, ""),
+                    SET m.lang = coalesce(m.lang, row.lang),
+                        m.full_import_name = coalesce(m.full_import_name, row.full_import_name)
+                    MERGE (f)-[r:IMPORTS {line_number: row.line_number}]->(m)
+                    SET r.alias = coalesce(row.alias, ""),
                         r.imported_name = row.imported_name,
                         r.full_import_name = row.full_import_name
                 """,
