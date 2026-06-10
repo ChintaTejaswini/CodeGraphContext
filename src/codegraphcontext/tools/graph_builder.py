@@ -864,6 +864,7 @@ class GraphBuilder:
             self.parsers.keys(),
             self.get_parser,
             scip_indexer,
+            cgcignore_path,
         )
 
     def _name_from_symbol(self, symbol: str) -> str:
