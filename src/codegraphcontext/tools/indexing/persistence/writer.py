@@ -1355,7 +1355,7 @@ class GraphWriter:
                 warning_logger(f"Attempted to delete non-existent repository: {repo_path}")
                 return False
 
-        for rel_type in ("CALLS", "INHERITS", "IMPORTS"):
+        for rel_type in ("CALLS", "INHERITS", "IMPORTS", "INCLUDES"):
             while True:
                 with self.driver.session() as session:
                     result = session.run(
@@ -1401,11 +1401,43 @@ class GraphWriter:
                     break
                 info_logger(f"[DELETE] Removed {deleted} {label} nodes for {repo_path_str}")
 
+        self._purge_dangling_pathless_nodes()
+
         with self.driver.session() as session:
             session.run("MATCH (r:Repository {path: $path}) DETACH DELETE r", path=repo_path_str)
 
         info_logger(f"Deleted repository and its contents from graph: {repo_path_str}")
         return True
+
+    def _purge_dangling_pathless_nodes(self) -> None:
+        """Remove shared pathless nodes (e.g. imported Module headers) left without references."""
+        dangling_queries = [
+            (
+                "MATCH (m:Module) WHERE NOT ()-[:IMPORTS|INCLUDES]->(m) "
+                "WITH m LIMIT 5000 DETACH DELETE m RETURN count(m) AS deleted"
+            ),
+            (
+                "MATCH (n:ExternalClass) WHERE NOT ()-[]->(n) "
+                "WITH n LIMIT 5000 DETACH DELETE n RETURN count(n) AS deleted"
+            ),
+            (
+                "MATCH (n:ExternalFunction) WHERE NOT ()-[]->(n) "
+                "WITH n LIMIT 5000 DETACH DELETE n RETURN count(n) AS deleted"
+            ),
+        ]
+        for query in dangling_queries:
+            try:
+                while True:
+                    with self.driver.session() as session:
+                        result = session.run(query).single()
+                        deleted = result["deleted"] if result else 0
+                    if deleted == 0:
+                        break
+                    info_logger(f"[DELETE] Purged {deleted} dangling pathless nodes")
+            except Exception as e:
+                if _is_binder_exception(e):
+                    continue
+                raise
 
     def get_caller_file_paths(self, file_path_str: str) -> set:
         with self.driver.session() as session:

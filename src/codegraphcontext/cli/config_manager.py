@@ -160,6 +160,14 @@ CONFIG_VALIDATORS = {
     "CGC_EMBEDDING_MODEL": ["local", "openai"],
     "FUZZY_SEARCH": ["true", "false"],
 }
+
+SUPPORTED_DATABASES: List[str] = CONFIG_VALIDATORS["DEFAULT_DATABASE"]
+DATABASE_CLI_HELP = (
+    "Database backend ("
+    + "|".join(SUPPORTED_DATABASES)
+    + "). Defaults to DEFAULT_DATABASE from config."
+)
+
 DEFAULT_CGCIGNORE_PATTERNS = """\
 # Default .cgcignore patterns
 # Lines starting with # are comments; blank lines are ignored.
@@ -279,18 +287,25 @@ def load_config() -> Dict[str, str]:
 def should_apply_project_dotenv() -> bool:
     """True when cwd-local ``.codegraphcontext/.env`` should merge with global config.
 
-    Skips project env when ``HOME`` is isolated (e.g. E2E) but ``cwd`` is an unrelated
-    checkout, unless ``CGC_LOAD_PROJECT_ENV=1``. Set ``CGC_IGNORE_PROJECT_ENV=1`` to force skip.
+    Project env is loaded only in **per-repo** context mode (or when
+    ``CGC_LOAD_PROJECT_ENV=1``). In **global** / **named** mode, ``~/.codegraphcontext/.env``
+    wins so clones with a checked-in ``.codegraphcontext/.env`` do not hijack config.
+
+    Set ``CGC_IGNORE_PROJECT_ENV=1`` to force skip; ``CGC_LOAD_PROJECT_ENV=1`` to force load.
     """
     if os.getenv("CGC_IGNORE_PROJECT_ENV", "").strip().lower() in ("1", "true", "yes"):
         return False
     if os.getenv("CGC_LOAD_PROJECT_ENV", "").strip().lower() in ("1", "true", "yes"):
         return True
+    cfg = load_context_config()
+    if cfg.mode != "per-repo":
+        return False
     try:
         Path.cwd().resolve().relative_to(Path.home().resolve())
         return True
     except ValueError:
-        return False
+        # Per-repo indexing from /tmp with an isolated HOME (common in E2E/CI).
+        return True
 
 
 def find_local_env() -> Optional[Path]:
@@ -869,23 +884,33 @@ def resolve_context(
         local_cgc = cwd / ".codegraphcontext"
         local_cgc.mkdir(parents=True, exist_ok=True)
         (local_cgc / "db").mkdir(exist_ok=True)
-        
+
+        inherited_db = load_config().get("DEFAULT_DATABASE", "falkordb")
+
         # Copy global .env into local context for easy per-repo tweaking
         import shutil
         if CONFIG_FILE.exists():
             shutil.copy2(CONFIG_FILE, local_cgc / ".env")
-            
-        console.print(f"[dim]Auto-initialized per-repo context at {local_cgc}[/dim]")
+
+        local_yaml = local_cgc / "config.yaml"
+        if not local_yaml.exists():
+            with open(local_yaml, "w", encoding="utf-8") as f:
+                yaml.safe_dump({"database": inherited_db}, f)
+
+        console.print(
+            f"[dim]Auto-initialized per-repo context at {local_cgc} "
+            f"(Database: {inherited_db})[/dim]"
+        )
 
     if local_cgc is not None:
         # Read local config.yaml if present
         local_yaml = local_cgc / "config.yaml"
-        local_db = "falkordb"
+        local_db = load_config().get("DEFAULT_DATABASE", "falkordb")
         if local_yaml.exists():
             try:
                 with open(local_yaml, encoding="utf-8") as f:
                     local_raw = yaml.safe_load(f) or {}
-                local_db = local_raw.get("database", "falkordb")
+                local_db = local_raw.get("database", local_db)
             except Exception:
                 pass
         db_path = str(local_cgc / "db" / local_db)

@@ -9,6 +9,7 @@ Commands:
 - help: Displays help information.
 - version: Show the installed version.
 """
+import sys
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -249,7 +250,7 @@ def context_list():
 @context_app.command("create")
 def context_create(
     name: str = typer.Argument(..., help="Name of the new context"),
-    database: str = typer.Option(None, "--database", "--db", "-db", "-d", help="Database backend (falkordb, kuzudb, neo4j). Defaults to DEFAULT_DATABASE from config."),
+    database: str = typer.Option(None, "--database", "--db", "-db", "-d", help=config_manager.DATABASE_CLI_HELP),
     db_path: str = typer.Option(None, "--db-path", help="Explicit path for the DB (defaults to ~/.codegraphcontext/contexts/<name>/db)"),
 ):
     """Create a new logical context."""
@@ -290,7 +291,7 @@ def _load_credentials(cli_context_flag: Optional[str] = None):
     Uses per-variable precedence - each variable is loaded from the highest priority source.
     Priority order (highest to lowest):
     1. Runtime environment variables (shell/CI)
-    2. Local `.codegraphcontext/.env` and `.env` in the current project directory (project-specific overrides)
+    2. Local `.codegraphcontext/.env` and `.env` in the current project directory (per-repo mode only)
     3. Global `~/.codegraphcontext/.env` (user defaults, including `cgc config set`)
     4. Local `mcp.json` env vars (project defaults)
 
@@ -653,10 +654,30 @@ def bundle_export(
     finally:
         db_manager.close_driver()
 
+def _confirm_bundle_clear(clear: bool, yes: bool) -> bool:
+    """Return True if import may proceed; False if user cancelled."""
+    if not clear:
+        return True
+    console.print("[yellow]⚠️  Warning: This will clear all existing graph data![/yellow]")
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        console.print(
+            "[bold red]Refusing to clear graph in non-interactive mode. "
+            "Pass --yes / -y to confirm.[/bold red]"
+        )
+        raise typer.Exit(code=1)
+    if not typer.confirm("Are you sure you want to continue?", default=False):
+        console.print("[yellow]Import cancelled[/yellow]")
+        return False
+    return True
+
+
 @bundle_app.command("import")
 def bundle_import(
     bundle_file: str = typer.Argument(..., help="Path to the .cgc bundle file to import"),
     clear: bool = typer.Option(False, "--clear", help="Clear existing graph data before importing"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation when using --clear"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
 ):
     """
@@ -667,7 +688,7 @@ def bundle_import(
     
     Examples:
         cgc bundle import numpy.cgc
-        cgc bundle import my-project.cgc --clear
+        cgc bundle import my-project.cgc --clear --yes
     """
     _load_credentials()
     from codegraphcontext.core.cgc_bundle import CGCBundle
@@ -684,11 +705,8 @@ def bundle_import(
             console.print(f"[bold red]Bundle file not found: {bundle_path}[/bold red]")
             raise typer.Exit(code=1)
         
-        if clear:
-            console.print("[yellow]⚠️  Warning: This will clear all existing graph data![/yellow]")
-            if not typer.confirm("Are you sure you want to continue?", default=False):
-                console.print("[yellow]Import cancelled[/yellow]")
-                return
+        if not _confirm_bundle_clear(clear, yes):
+            return
         
         console.print(f"[cyan]Importing bundle from {bundle_path}...[/cyan]")
         
@@ -710,7 +728,8 @@ def bundle_import(
 @bundle_app.command("load")
 def bundle_load(
     bundle_name: str = typer.Argument(..., help="Bundle name or path to load (e.g., 'numpy' or 'numpy.cgc')"),
-    clear: bool = typer.Option(False, "--clear", help="Clear existing graph data before loading")
+    clear: bool = typer.Option(False, "--clear", help="Clear existing graph data before loading"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation when using --clear"),
 ):
     """
     Load a pre-indexed bundle (download if needed, then import).
@@ -731,7 +750,7 @@ def bundle_load(
     
     # If it's an absolute path or has .cgc extension and exists, use it directly
     if bundle_path.is_absolute() or (bundle_path.suffix == '.cgc' and bundle_path.exists()):
-        bundle_import(str(bundle_path), clear=clear)
+        bundle_import(str(bundle_path), clear=clear, yes=yes)
         return
     
     # Add .cgc extension if not present
@@ -741,7 +760,7 @@ def bundle_load(
     # Check if exists locally
     if bundle_path.exists():
         console.print(f"[dim]Found local bundle: {bundle_path}[/dim]")
-        bundle_import(str(bundle_path), clear=clear)
+        bundle_import(str(bundle_path), clear=clear, yes=yes)
         return
     
     # Try to download from registry
@@ -759,7 +778,7 @@ def bundle_load(
         
         if downloaded_path:
             # Import the downloaded bundle
-            bundle_import(downloaded_path, clear=clear)
+            bundle_import(downloaded_path, clear=clear, yes=yes)
         else:
             console.print(f"[bold red]Failed to download bundle '{name}'[/bold red]")
             raise typer.Exit(code=1)
@@ -783,10 +802,11 @@ def export_shortcut(
 @app.command("load", rich_help_panel="Bundle Shortcuts")
 def load_shortcut(
     bundle_name: str = typer.Argument(..., help="Bundle name or path to load"),
-    clear: bool = typer.Option(False, "--clear", help="Clear existing graph data before loading")
+    clear: bool = typer.Option(False, "--clear", help="Clear existing graph data before loading"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation when using --clear"),
 ):
     """Shortcut for 'cgc bundle load'"""
-    bundle_load(bundle_name, clear)
+    bundle_load(bundle_name, clear, yes=yes)
 
 # ============================================================================
 # REGISTRY COMMAND GROUP - Browse and Download Bundles
@@ -2708,7 +2728,9 @@ def main(
         "--database", 
         "--db",
         "-db", 
-        help="[Global] Temporarily override database backend (falkordb, falkordb-remote, neo4j, or kuzudb) for any command"
+        help="[Global] Temporarily override database backend ("
+        + "|".join(config_manager.SUPPORTED_DATABASES)
+        + ") for any command"
     ),
     visual: bool = typer.Option(
         False,

@@ -606,14 +606,30 @@ class TestDeleteRepositoryFromGraph:
         result = gb.delete_repository_from_graph("/my/repo")
         assert result is True
 
+    def test_purges_dangling_pathless_modules(self):
+        """Pathless Module nodes (C #includes) must be removed after repo delete."""
+        session = self._make_repo_exists_session()
+        gb, writer = _make_graph_builder(session)
+        gb.delete_repository_from_graph("/my/repo")
+
+        queries = [c["query"] for c in session.calls]
+        assert any(
+            "Module" in q and "IMPORTS|INCLUDES" in q and "DETACH DELETE" in q
+            for q in queries
+        ), "Expected dangling Module purge after repository deletion"
+
     def test_deletes_relationships_before_nodes(self):
-        """CALLS/INHERITS/IMPORTS deletion must appear before Function/Class/File node deletion."""
+        """CALLS/INHERITS/IMPORTS/INCLUDES deletion must appear before Function/Class/File node deletion."""
         session = self._make_repo_exists_session()
         gb, _ = _make_graph_builder(session)
         gb.delete_repository_from_graph("/my/repo")
 
         queries = [c["query"] for c in session.calls]
-        rel_idx = next((i for i, q in enumerate(queries) if "CALLS" in q or "INHERITS" in q or "IMPORTS" in q), None)
+        rel_idx = next(
+            (i for i, q in enumerate(queries)
+             if any(rt in q for rt in ("CALLS", "INHERITS", "IMPORTS", "INCLUDES"))),
+            None,
+        )
         node_idx = next((i for i, q in enumerate(queries) if any(f"MATCH (n:{lbl})" in q for lbl in ("Function", "Class", "File"))), None)
 
         assert rel_idx is not None, "No relationship deletion query found"

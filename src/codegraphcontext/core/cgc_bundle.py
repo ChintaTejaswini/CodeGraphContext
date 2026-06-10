@@ -850,13 +850,23 @@ cgc import <bundle-file>.cgc
             
             repo_path = record['path']
             
+            repo_prefix = repo_path if repo_path.endswith("/") else f"{repo_path}/"
             # Delete all nodes that belong to this repository
-            # Files, Functions, Classes, Modules all have paths that start with repo_path
             session.run("""
                 MATCH (n)
-                WHERE n.path STARTS WITH $repo_path
+                WHERE n.path STARTS WITH $repo_prefix OR n.path = $repo_path
                 DETACH DELETE n
-            """, repo_path=repo_path)
+            """, repo_path=repo_path, repo_prefix=repo_prefix)
+
+            # Remove pathless import Module nodes left without references
+            while True:
+                result = session.run("""
+                    MATCH (m:Module) WHERE NOT ()-[:IMPORTS|INCLUDES]->(m)
+                    WITH m LIMIT 5000 DETACH DELETE m RETURN count(m) AS deleted
+                """)
+                record = result.single()
+                if not record or record["deleted"] == 0:
+                    break
             
             # Delete the repository node itself
             session.run("""
